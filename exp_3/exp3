@@ -1,0 +1,149 @@
+Amishi Gupta
+23/CS/048
+EXP 3
+!pip install torch torchvision torchaudio --quiet
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms, models
+from torch.utils.data import DataLoader
+import numpy as np
+import os
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+train_data = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
+test_data  = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
+
+train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
+test_loader  = DataLoader(test_data, batch_size=64, shuffle=False)
+train_data.data = train_data.data[:5000]
+train_data.targets = train_data.targets[:5000]
+def get_activation(name):
+    if name == "relu": return nn.ReLU()
+    if name == "tanh": return nn.Tanh()
+    if name == "leaky": return nn.LeakyReLU(0.1)
+
+def init_weights(m, init_type):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+        if init_type == "xavier":
+            nn.init.xavier_uniform_(m.weight)
+        elif init_type == "kaiming":
+            nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
+        elif init_type == "random":
+            nn.init.uniform_(m.weight, -0.1, 0.1)
+
+class CNN(nn.Module):
+    def __init__(self, activation="relu", init_type="xavier"):
+        super().__init__()
+        act = get_activation(activation)
+
+        self.layers = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1),
+            act,
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(32, 64, 3, padding=1),
+            act,
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(64, 128, 3, padding=1),
+            act,
+            nn.MaxPool2d(2)
+        )
+
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128 * 4 * 4, 256),
+            act,
+            nn.Dropout(0.3),
+            nn.Linear(256, 10)
+        )
+
+        self.apply(lambda m: init_weights(m, init_type))
+
+    def forward(self, x):
+        x = self.layers(x)
+        x = self.fc(x)
+        return x
+def train_model(model, optimizer, epochs=1):
+    criterion = nn.CrossEntropyLoss()
+    model.to(device)
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0
+
+        for images, labels in train_loader:
+            images, labels = images.to(device), labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        print(f"Epoch {epoch+1}/{epochs} | Loss: {total_loss/len(train_loader):.4f}")
+
+
+def test_model(model):
+    correct = 0
+    total = 0
+    model.eval()
+
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, preds = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (preds == labels).sum().item()
+
+    acc = 100 * correct / total
+    print("Test Accuracy:", acc, "%")
+    return acc
+activations = ["relu", "tanh", "leaky"]
+initializations = ["xavier", "kaiming", "random"]
+optimizers_list = ["sgd", "adam", "rmsprop"]
+
+best_acc = 0
+best_model = None
+
+for act in activations:
+    for init in initializations:
+        for opt_name in optimizers_list:
+
+            print(f"Training CNN | Act={act} | Init={init} | Opt={opt_name}")
+
+            model = CNN(act, init)
+
+            if opt_name == "sgd": optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+            if opt_name == "adam": optimizer = optim.Adam(model.parameters(), lr=0.001)
+            if opt_name == "rmsprop": optimizer = optim.RMSprop(model.parameters(), lr=0.001)
+
+            train_model(model, optimizer, epochs=1)
+            acc = test_model(model)
+            if acc > best_acc:
+                best_acc = acc
+                best_model = model
+                torch.save(model.state_dict(), "best_cifar10_model.pth")
+                print("Saved new BEST model")
+
+print("BEST ACCURACY ACHIEVED:", best_acc)
+resnet = models.resnet18(weights="IMAGENET1K_V1")
+resnet.fc = nn.Linear(512, 10)
+resnet = resnet.to(device)
+
+optimizer = optim.Adam(resnet.parameters(), lr=0.0005)
+
+train_model(resnet, optimizer, epochs=1)
+test_model(resnet)
+
+torch.save(resnet.state_dict(), "resnet18_cifar10.pth")
+print("Saved ResNet-18 weights.")
